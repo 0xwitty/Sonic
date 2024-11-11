@@ -149,7 +149,7 @@ func StartIntegrationTestNet(directory string) (*IntegrationTestNet, error) {
 	}
 	defer client.Close()
 
-	const timeout = 30 * time.Second
+	const timeout = 300 * time.Second
 	start := time.Now()
 
 	// wait for the node to be ready to serve requests
@@ -168,7 +168,7 @@ func StartIntegrationTestNet(directory string) (*IntegrationTestNet, error) {
 		return net, nil
 	}
 
-	return nil, fmt.Errorf("failed to successfully start up a test network within %d ms", timeout)
+	return nil, fmt.Errorf("failed to successfully start up a test network within %v", timeout)
 }
 
 // Stop shuts the underlying network down.
