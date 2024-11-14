@@ -67,11 +67,17 @@ func TestTransactionOrder(t *testing.T) {
 		gotOrder = append(gotOrder, blk.Transactions()...)
 	}
 
-	for i, want := range wantOrder {
-		// first transaction is the deployment so the list is shifted by one
-		got := gotOrder[i+8].Hash()
-		if got.Cmp(want) != 0 {
-			t.Fatalf("incorrect tx order, got: %s, want: %s", got, want)
+	for i, txHash := range wantOrder {
+		receipt, err := client.TransactionReceipt(context.Background(), txHash) // first query synchronizes the execution
+		if err != nil {
+			t.Fatalf("failed to get receipt for tx %s; %v", txHash, err)
+		}
+		count, err := contract.ParseCount(*receipt.Logs[0])
+		if err != nil {
+			t.Fatalf("cannot parse count: %v", err)
+		}
+		if got, want := count.Count.Int64(), int64(i+1); got != want {
+			t.Fatalf("incorrect transaction order, got count: %d, want count: %d", got, want)
 		}
 	}
 }
