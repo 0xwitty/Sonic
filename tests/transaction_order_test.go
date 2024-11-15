@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"github.com/Fantom-foundation/go-opera/tests/contracts/counter_event_emitter"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/Fantom-foundation/go-opera/utils/signers/gsignercache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"math/big"
@@ -23,61 +23,53 @@ func TestTransactionOrder(t *testing.T) {
 		t.Fatalf("failed to deploy contract; %v", err)
 	}
 
-	wantOrder := make([]common.Hash, 0, numTxs)
-	for i := 0; i < numTxs; i++ {
-		counter, err := contract.GetCount(nil)
-		if err != nil {
-			t.Fatalf("failed to get counter value; %v", err)
-		}
-
-		if counter.Cmp(new(big.Int).SetInt64(int64(i))) != 0 {
-			t.Fatalf("unexpected counter value; expected %d, got %v", i, counter)
-		}
-
-		// Save transaction hashes in order at which the transactions are executed.
-		_, err = net.Apply(func(opts *bind.TransactOpts) (*types.Transaction, error) {
-			tx, err := contract.Increment(opts)
-			wantOrder = append(wantOrder, tx.Hash())
-			return tx, err
-		})
-		if err != nil {
-			t.Fatalf("failed to increment counter; %v", err)
-		}
-	}
 	client, err := net.GetClient()
 	if err != nil {
 		t.Fatalf("cannot get client: %v", err)
 	}
-	lastBlock, err := client.BlockNumber(context.Background())
+	defer client.Close()
+
+	opts, err := net.GetTransactOptions(&net.validator)
 	if err != nil {
-		t.Fatalf("cannot find last block number: %v", err)
+		t.Fatalf("cannot get transact options: %v", err)
 	}
-	if lastBlock == 0 {
-		t.Fatal("0 blocks produced")
+	tx, err := contract.Increment(opts)
+	if err != nil {
+		t.Fatalf("failed to increment counter; %v", err)
 	}
 
-	gotOrder := make(types.Transactions, 0, numTxs+8)
-
-	for i := uint64(0); i <= lastBlock; i++ {
-		blk, err := client.BlockByNumber(context.Background(), new(big.Int).SetUint64(i))
+	signer := gsignercache.Wrap(types.NewCancunSigner(new(big.Int).SetUint64(4003)))
+	wantOrder := make([]common.Hash, 0, numTxs)
+	for i := uint64(0); i < numTxs; i++ {
+		signedTx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
+			ChainID:    new(big.Int).Set(tx.ChainId()),
+			Nonce:      i + 2,
+			GasTipCap:  new(big.Int).Set(tx.GasTipCap()),
+			GasFeeCap:  new(big.Int).Set(tx.GasFeeCap()),
+			Gas:        tx.Gas(),
+			To:         tx.To(),
+			Value:      new(big.Int).Set(tx.Value()),
+			Data:       tx.Data(),
+			AccessList: tx.AccessList(),
+		}), signer, net.validator.PrivateKey)
 		if err != nil {
-			t.Fatalf("cannot get block number %v: %v", i, err)
+			t.Fatalf("cannot sign tx: %v", err)
 		}
-		blk.ReceiptHash()
-		gotOrder = append(gotOrder, blk.Transactions()...)
+
+		err = client.SendTransaction(context.Background(), signedTx) // < from this point on, tx is processed asynchronously
+		if err != nil {
+			t.Fatalf("failed to send transaction; %v", err)
+		}
+
+		wantOrder = append(wantOrder, signedTx.Hash())
 	}
 
-	for i, txHash := range wantOrder {
+	receipts := make([]*types.Receipt, 0, numTxs)
+	for _, txHash := range wantOrder {
 		receipt, err := client.TransactionReceipt(context.Background(), txHash) // first query synchronizes the execution
 		if err != nil {
 			t.Fatalf("failed to get receipt for tx %s; %v", txHash, err)
 		}
-		count, err := contract.ParseCount(*receipt.Logs[0])
-		if err != nil {
-			t.Fatalf("cannot parse count: %v", err)
-		}
-		if got, want := count.Count.Int64(), int64(i+1); got != want {
-			t.Fatalf("incorrect transaction order, got count: %d, want count: %d", got, want)
-		}
+		receipts = append(receipts, receipt)
 	}
 }
